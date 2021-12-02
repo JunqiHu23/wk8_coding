@@ -104,7 +104,7 @@ raster::writeRaster(.,str_c(here::here("examplegoogledrive"),
 加载波段 8 并将其添加到我们的栅格堆栈中
 ```{r}
 b8backin<-dir_info(here::here("examplegoogledrive"))%>%
-  dplyr::filter(str_detect(path, "[B8].TIF")) %>%
+  dplyr::filter(str_detect(path, "[B8].tif")) %>%
   dplyr::select(path)%>%
   pull()%>%
   as.character()%>%
@@ -148,4 +148,161 @@ outputfilenames <-
 names(lsatmask)：原始栅格图层名称
 "mask"：我想添加到名称中的内容
 sep="": 如何将名称和“掩码”分开——“”表示没有空格
-由于我无法将 Landsat 文件上传到 GitHub，因此我将它们存储在一个未链接的文件夹中（请记住，这些文件都在 GitHub 上）——所以你不会prac7_data/Lsatdata在那里找到。如果要将剪辑的 Landsat 文件存储在项目目录中，只需使用：
+由于我无法将 Landsat 文件上传到 GitHub，因此我将它们存储在一个未链接的文件夹中（请记住，这些文件都在 GitHub 上）——所以你不会prac7_data/Lsatdata在那里找到。如果要将剪辑的 Landsat 文件存储在项目目录中，只需使用：1
+```{r}
+lsatmask %>%
+  raster::writeRaster(., names(lsatmask), 
+              bylayer=TRUE, 
+              format='GTiff', 
+              overwrite=TRUE)
+```
+
+#8.8 Data exploration
+8.8.1 More loading and manipulating
+对于下一阶段的分析，我们只对波段 1-7 感兴趣，我们可以从刚刚保存的文件中重新加载它们，也可以直接从原始栅格堆栈中获取它们
+```{r}
+# or extract them from the original stack
+manc<-stack(lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B1_mask,
+                   lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B2_mask,
+                   lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B3_mask,
+                   lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B4_mask,
+                   lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask,
+                   lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask,
+                   lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B7_mask)
+
+# Name the Bands based on where they sample the electromagentic spectrum
+names(manc) <- c('ultra-blue', 'blue', 'green', 'red', 'NIR', 'SWIR1', 'SWIR2') 
+```
+
+8.8.2 Plotting data
+让我们来看看我们的栅格数据，首先是真彩色（人类如何看待世界），然后是假彩色合成（使用任何其他波段，但不使用红色、绿色和蓝色的组合）。
+```{r}
+# true colour composite
+manc_rgb <- stack(manc$red, manc$green, manc$blue)
+# false colour composite
+manc_false <- stack(manc$NIR, manc$red, manc$green)
+
+manc_rgb %>%
+  plotRGB(.,axes=TRUE, stretch="lin")
+```
+
+```{r}
+manc_false %>%
+    plotRGB(.,axes=TRUE, stretch="lin")
+```
+
+8.8.3 Data similarity
+如果您想查看单波段并检查波段之间的相似性怎么办？
+```{r}
+# Looking at single bands
+plot(manc$SWIR2)
+```
+
+```{r}
+## How are these bands different?
+#set the plot window size (2 by 2)
+par(mfrow = c(2,2))
+#plot the bands
+plot(manc$blue, main = "Blue")
+plot(manc$green, main = "Green")
+plot(manc$red, main = "Red")
+plot(manc$NIR, main = "NIR")
+```
+    
+```{r}
+## Look at the stats of these bands
+pairs(manc[[1:7]])
+```
+ 低统计显着性意味着这些波段的波长反射率差异足够大，可以在图像中显示不同的内容。我们也可以用ggplot2and让它看起来更好一点GGally
+```{r}
+library(ggplot2)
+library(GGally)
+
+manc %>%
+  terra::as.data.frame(., na.rm=TRUE)%>%
+  dplyr::sample_n(., 100)%>%
+  ggpairs(.,axisLabels="none")
+```
+
+#8.9 Basic raster calculations 
+
+现在我们将继续进行一些基本的高级栅格分析，以根据此栅格数据计算温度。为此，我们需要生成额外的栅格层，其中第一个是 NDVI
+
+8.9.1 NDVI
+活的绿色植被可以通过归一化差异植被指数 (NDVI) 用 NIR 和红色波段表示，因为叶绿素在 NIR 波长中反射，但在红色波长中吸收。
+
+
+8.9.2 NDVI function
+
+让我们创建一个名为的函数 NDVIfun
+```{r}
+NDVIfun <- function(NIR, Red) {
+  NDVI <- (NIR - Red) / (NIR + Red)
+  return(NDVI)
+}
+```
+这里我们说过我们的函数需要两个参数 NIR 和 Red，下一行根据公式计算 NDVI 并返回它。为了能够在我们的整个分析过程中使用此函数，请将其复制到控制台或创建一个新的 R 脚本，将其保存在您的项目中，然后使用该source()函数在此代码中调用它，例如……
+
+```{r}
+source('NDVIfun.R')
+```
+
+```{r}
+ndvi <- NDVIfun(manc$NIR, manc$red)
+```
+
+```{r}
+ndvi %>%
+  plot(.,col = rev(terrain.colors(10)), main = "Landsat-NDVI")
+```
+```{r}
+# Let's look at the histogram for this dataset
+ndvi %>%
+  hist(., breaks = 40, main = "NDVI Histogram", xlim = c(-.3,.8))
+```
+
+我们可以根据使用第三四分位数的直方图重新分类到栅格以显示最有可能进入植被的用途——我们假设高于第三四分位数的任何东西都是植被。
+```{r}
+veg <- ndvi %>%
+  reclassify(., cbind(-Inf, 0.3, NA))
+
+veg %>%
+  plot(.,main = 'Possible Veg cover')
+```
+
+让我们来看看这与整个曼彻斯特的关系
+```{r}
+manc_rgb %>%
+  plotRGB(.,axes = TRUE, stretch = "lin", main = "Landsat True Color Composite")
+
+veg %>%
+  plot(., add=TRUE, legend=FALSE)
+```
+
+#8.10 Advanced raster calculations
+8.10.1 Calucating tempearture from Landsat data
+
+
+下载 Landsat 数据时提供的文件中提供了Grescale 和 Brescale 。在记事本中打开此文件并提取频段 10 增益 (MULT_BAND) 和偏置 (ADD_BAND) 所需的值
+```{r}
+library(RStoolbox)
+
+MTL<-dir_info(here::here("examplegoogledrive")) %>%
+  dplyr::filter(str_detect(path, "MTL.txt")) %>%
+  dplyr::select(path)%>%
+  pull()%>%
+  readMeta()
+
+ #To see all the attributes
+head(MTL)
+```
+
+
+
+
+
+
+
+
+
+    
