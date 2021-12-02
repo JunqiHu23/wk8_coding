@@ -5,6 +5,7 @@ date: "2021/12/2"
 output: html_document
 ---
 
+#8.6 data
 ```{r}
 library('googledrive')
 
@@ -29,3 +30,122 @@ listfiles<-dir_info(here::here("examplegoogledrive")) %>%
   utils::untar(exdir=here::here("examplegoogledrive"))
 ```
 
+#8.7 Processing raster data
+8.7.1loading
+```{r}
+## listing all possible libraries that all presenters may need following each practical
+library(sp)
+library(raster)
+library(rgeos)
+library(rgdal)
+library(rasterVis)
+library(ggplot2)
+library(terra)
+library(sf)
+library(stringr)
+library(fs)
+library(tidyverse)
+```
+
+```{r}
+# List your raster files excluding band 8 using the patter argument
+listlandsat<-dir_info(here::here("examplegoogledrive"))%>%
+  dplyr::filter(str_detect(path, "[B123456790].TIF")) %>%
+  dplyr::select(path)%>%
+  pull()%>%
+  as.character()%>%
+  # Load our raster layers into a stack
+  stack()
+```
+
+```{r}
+# Load the manchester boundary
+manchester_boundary <- st_read(here::here("data", 
+                                          "manchester_boundary_download",
+                                          "Manchester_boundary.shp"))
+```
+
+```{r}
+#check they have the same Coordinate Reference System (CRS)
+crs(manchester_boundary)
+```
+```{r}
+crs(listlandsat)
+```
+
+8.7.2 Resampling
+此数据集存在错误，因为波段 8 未与其他栅格图层的范围完全对齐。有多种方法可以解决此问题，但在本教程中，我们将使用波段 1 的范围重新采样波段 8 图层。首先，读取波段 8 并将其存储为栅格。
+```{r  eval=FALSE, cache=TRUE}
+# get band 8
+b8list<-dir_info(here::here("examplegoogledrive"))%>%
+ dplyr::filter(str_detect(path, "[B8].TIF")) %>%
+ dplyr::select(path)%>%
+ pull()%>%
+ as.character()%>%
+ raster()
+```
+
+
+8.7.2 Resampling
+然后，resample()写出新层，重采样需要一段时间，所以请耐心等待或在 GitHub 上找到我的输出
+```{r}
+## ngb is a nearest neighbour sampling method
+b8correct <- b8list%>%
+  resample(., listlandsat$LC08_L1TP_203023_20190513_20190521_01_T1_B1, 
+             method = "ngb") %>%
+  # Write out the raster
+raster::writeRaster(.,str_c(here::here("examplegoogledrive"), 
+                  names(b8list), 
+                  sep="/"),
+            format='GTiff', 
+            overwrite=TRUE)
+```
+
+加载波段 8 并将其添加到我们的栅格堆栈中
+```{r}
+b8backin<-dir_info(here::here("examplegoogledrive"))%>%
+  dplyr::filter(str_detect(path, "[B8].TIF")) %>%
+  dplyr::select(path)%>%
+  pull()%>%
+  as.character()%>%
+  raster()
+  
+listlandsat <- listlandsat %>%
+  addLayer(., b8backin)
+```
+
+我们可以比较一下两个栅格是否具有相同的范围、行数和列数、投影、分辨率和原点
+```{r}
+raster::compareRaster(listlandsat$LC08_L1TP_203023_20190513_20190521_01_T1_B1,
+              listlandsat$LC08_L1TP_203023_20190513_20190521_01_T1_B8)
+```
+
+8.7.3 Clipping
+我们的栅格目前是卫星数据分布所在场景的大小，要将其裁剪到我们的研究区域，最好先将其裁剪到 shapefile 的范围，然后像我们在以前的实践中所做的那样将其屏蔽……
+```{r}
+lsatmask <- listlandsat %>%
+  # now crop our temp data to the extent
+  raster::crop(.,manchester_boundary)%>%
+  raster::mask(.,  manchester_boundary)
+```
+
+如果我们想要做的只是剪辑我们的数据，我们现在可以更改光栅堆栈中的.TIFF文件名并再次写出文件……
+```{r}
+# add mask to the filenames within the raster stack
+
+names(lsatmask) <- names(lsatmask)%>%
+  str_c(., 
+        "mask", 
+        sep="_")
+
+# I need to write mine out in another location
+outputfilenames <-
+  str_c("examplegoogledrive", "mask/", names(lsatmask) ,sep="")
+```
+
+在第一行代码中，我使用了栅格图层的原始名称并在它们的末尾添加了“mask”。这是使用str_c()stringr 包和参数完成的
+
+names(lsatmask)：原始栅格图层名称
+"mask"：我想添加到名称中的内容
+sep="": 如何将名称和“掩码”分开——“”表示没有空格
+由于我无法将 Landsat 文件上传到 GitHub，因此我将它们存储在一个未链接的文件夹中（请记住，这些文件都在 GitHub 上）——所以你不会prac7_data/Lsatdata在那里找到。如果要将剪辑的 Landsat 文件存储在项目目录中，只需使用：
