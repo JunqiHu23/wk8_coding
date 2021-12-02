@@ -523,9 +523,192 @@ manchester_LSOA_temp <- manchester_LSOA %>%
   dplyr::rename(temp=layer)
 ```
 
+现在我们有了每个 LSOA 的温度，但是考虑到城市的土地数量呢？在这里，我们将假设任何高于 0 的 NDBI 值都意味着整个像素都被认为是城市像素。raster::extract()也可用于获取每个空间区域 (LSOA) 内的所有像素。
+
+```{r}
+#define urban as NDBI greater than 0
+NDBI_urban<- NDBI > 0
+
+# Sum the pixels that are grater than 0 per LSOA
+NDBI_urban_per_LSOA <- raster::extract(NDBI_urban, manchester_LSOA, na.rm=TRUE, df=TRUE, fun=sum)
+
+# list the pixels per LSOA
+NDBI_per_LSOA_cells <- raster::extract(NDBI_urban, manchester_LSOA, na.rm=TRUE, df=TRUE, cellnumbers=TRUE)
+
+#count the pixels per LSOA
+NDBI_per_LSOA2_cells<- NDBI_per_LSOA_cells %>%
+  count(ID)
+
+#add the LSOA ID to the urban area
+NDBI_urban_per_LSOA$FID<-manchester_LSOA$FID
+
+#add the LSOA ID to the number of cells
+NDBI_per_LSOA2_cells$FID<-manchester_LSOA$FID
+
+#join these two
+Urban_info_LSOA <- NDBI_urban_per_LSOA %>%
+  left_join(.,
+            NDBI_per_LSOA2_cells,
+            by="FID")
+
+# remove what you don't need and rename
+Urban_info_LSOA_core_needed <- Urban_info_LSOA %>%
+  dplyr::rename(urban_count=layer, 
+                LSOA_cells=n) %>%
+  dplyr::select(urban_count,
+         LSOA_cells,
+         FID)%>%
+  dplyr::mutate(percent_urban=urban_count/LSOA_cells*100)
+
+# join the data 
+# one sf with temp and % urban per LSOA
+manchester_LSOA_temp_urban <- manchester_LSOA_temp %>%
+  left_join(.,
+             Urban_info_LSOA_core_needed,
+             by="FID")
+```
+
+#8.15映射
+现在，我们可以分别绘制 LSOA 内的温度（和市区百分比）......
+```{r}
+Places <- st_read(here::here("data", 
+                             "greater-manchester-latest-free.shp",
+                             "gis_osm_places_free_1.shp")) %>%
+   st_transform(., 32630)
+```
+
+```{r}
+manchester_Places <- Places[manchester_boundary,]%>%
+  filter(fclass=="city")
+```
+
+让我们制作一张地图，就像我们之前在模块中使用tmap包所做的那样，记得在 Rmarkdown 中添加一个标题，将参数包含fig.cap="caption here"在代码块标题中。
+```{r}
+# this first bit makes the box bigger
+# so we can have a north arrow not overlapping the data
+# see: https://www.jla-data.net/eng/adjusting-bounding-box-of-a-tmap-map/
+bbox_new <- st_bbox(manchester_LSOA_temp_urban) # current bounding box
+
+yrange <- bbox_new$ymax - bbox_new$ymin # range of y values
+
+bbox_new[4] <- bbox_new[4] + (0.1 * yrange) # ymax - top
+bbox_new[2] <- bbox_new[2] - (0.1 * yrange) # ymin - bottom
+
+# the plot starts here
+library(tmap)
+tmap_mode("plot")
+# set the new bbox
+# remove bbox=bbox_new to see the difference
+tm1 <- tm_shape(manchester_LSOA_temp_urban, bbox = bbox_new) + 
+  tm_polygons("temp",
+              palette="OrRd",
+              legend.hist=TRUE,
+              title="Temperature")+
+  tm_shape(manchester_Places, bbox=bbox_new)+
+  tm_dots(size=0.1, col="white")+
+  tm_text(text="name", size=0.75, ymod=-0.5, col="white", fontface = "bold")+
+  #tm_legend(show=FALSE)+
+  tm_layout(frame=FALSE,
+            legend.outside=TRUE)+
+  tm_compass(type = "arrow", size=1, position = c("left", "top")) +
+  tm_scale_bar(position= c("left", "bottom"), breaks=c(0,2,4), text.size = .75)
+  #tm_credits("(a)", position=c(0,0.85), size=1.5)
+
+tm1
+```
 
 
+#8.16 双变量映射（可选)
+虽然双变量映射看起来很酷，但它们并没有告诉我们有关实际数据值的任何信息，只是根据我们之前看到的样式参数将数据划分为类 - jenks、equal 等。所以在这里我想生产：
 
+曼彻斯特内 LSOA 的中心二元图
+中心二元变量将具有 MSOA 边界和一些地名
+显示数据分布的两个图
+```{r}
+library(biscale)
+library(cowplot)
+library(sysfonts)
+library(extrafont) 
+library(showtext) # more fonts
+```
 
+```{r}
+#font_add_google("Lato", regular.wt = 300, bold.wt = 700) # I like using Lato for data viz (and everything else...). Open sans is also great for web viewing.
+showtext_auto()
 
+# create classes
+data <- bi_class(manchester_LSOA_temp_urban, x = temp, y = percent_urban, style = "jenks", dim = 3)
+
+#ggplot map
+map <- ggplot() +
+ geom_sf(data = data, mapping = aes(fill = bi_class), color=NA, lwd = 0.1, show.legend = FALSE) +
+  bi_scale_fill(pal = "DkViolet", dim = 3) +
+  geom_sf(data = manchester_MSOA, mapping = aes(fill=NA), color="black", alpha=0, show.legend = FALSE)+
+  geom_sf(data=manchester_Places, mapping=aes(fill=NA), color="white", show.legend = FALSE)+
+  geom_sf_text(data=manchester_Places, aes(label = name, hjust = 0.5, vjust = -0.5),
+               nudge_x = 0, nudge_y = 0,
+               fontface = "bold",
+             color = "white",
+             show.legend = FALSE,
+             inherit.aes = TRUE)+
+  labs(
+    title = "",
+    x="", y=""
+  ) +
+  bi_theme()
+
+legend <- bi_legend(pal = "DkViolet",
+                    dim = 3,
+                    xlab = "Temperature ",
+                    ylab = "% Urban",
+                    size = 8)
+
+credit<- ("Landsat dervied temperature and urban area, taken 13/5/19")
+
+# combine map with legend
+finalPlot <- ggdraw() +
+  draw_plot(map, 0, 0, 1, 1) +
+  draw_plot(legend, 0.1, 0.1, 0.2, 0.2)
+  #draw_text(credit, 0.68, 0.1, 0.2, 0.2, size=10)
+finalPlot
+```
+
+```{r}
+urban_box<-ggplot(data, aes(x=bi_class, y=percent_urban, fill=bi_class)) +
+  geom_boxplot()+
+  scale_fill_manual(values=c("#CABED0", "#BC7C8F", "#806A8A", "#435786", "#AE3A4E", "#77324C", "#3F2949", "#3F2949"))+
+  labs(x="Bivariate class (temp, urban)", 
+       y="Urban %")+
+  theme_light()+
+  theme(legend.position="none") # Remove legend
+
+temp_violin<-ggplot(data, aes(x=bi_class, y=temp, fill=bi_class))+
+  geom_violin()+
+  scale_fill_manual(values=c("#CABED0", "#BC7C8F", "#806A8A", "#435786", "#AE3A4E", "#77324C", "#3F2949", "#3F2949"))+
+  labs(x="", 
+       y="Temperature")+
+   guides(fill=guide_legend(title="Class"))+
+  theme_light()+
+  theme(legend.position="none") # Remove legend
+```
+
+分两步将它们连接在一起 - 制作侧线图，然后将其连接到主线图
+
+```{r}
+side <- plot_grid(temp_violin, urban_box, labels=c("B","C"),label_size = 12, ncol=1)
+
+all <- plot_grid(finalPlot, side, labels = c('A'), label_size = 12, ncol = 2,  rel_widths = c(2, 1))
+```
+
+```{r}
+all
+```
+
+```{r}
+dev.copy(device = png, filename = here::here("images", "bivaraite.png"), width = 687, height = 455) 
+```
+
+```{r}
+dev.off()
+```
 
