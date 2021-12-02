@@ -1,0 +1,8 @@
+---
+title: "wk8_prac_coding"
+author: "chris"
+date: "2021/12/2"
+output: html_document
+---
+
+
