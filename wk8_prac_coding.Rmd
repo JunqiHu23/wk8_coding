@@ -297,12 +297,235 @@ MTL<-dir_info(here::here("examplegoogledrive")) %>%
 head(MTL)
 ```
 
+现在让我们从波段 10 的 readMTL 变量中提取值……我们可以使用getMeta()from函数或者RStoolbox自己提取值……
+```{r}
+offsetandgain <-MTL %>%
+  getMeta("B10_dn", metaData = ., what = "CALRAD")
+
+offsetandgain
+```
+
+```{r}
+##OR  
+offsetandgain <- subset(MTL$CALRAD, rownames(MTL$CALRAD) == "B10_dn")
+```
+
+使用波段 10 栅格图层运行计算
+```{r}
+TOA <- offsetandgain$gain *
+  lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B10_mask + 
+  offsetandgain$offset
+```
 
 
+接下来将 TOA 转换为亮度温度  吨乙
+  使用以下等式
+```{r}
+Calidata <- MTL$CALBT%>%
+  terra::as.data.frame()%>%
+  mutate(Band=rownames(.))%>%
+  filter(Band=="B10_dn")
 
+# subset the columns
+K1 <- Calidata %>%
+  dplyr::select(K1)%>%
+  pull()
 
+K2 <- Calidata %>%
+  dplyr::select(K2)%>%
+  pull()
 
+Brighttemp <- (K2 / log((K1 / TOA) + 1))
+```
+首先我们需要计算每个像素的植被分数
+```{r}
+facveg <- (ndvi-0.2/0.5-0.2)^2
+```
+现在使用以下方法计算发射率
+```{r}
+emiss <- 0.004*facveg+0.986
+```
 
+```{r}
+Boltzmann <- 1.38*10e-23
+Plank <- 6.626*10e-34
+c <- 2.998*10e8
 
-
+p <- Plank*(c/Boltzmann)
+```
     
+```{r}
+#define remaining varaibles
+lambda <- 1.09e-5
+#run the LST calculation
+LST <- Brighttemp/(1 +(lambda*Brighttemp/p)*log(emiss))
+# check the values
+LST
+```
+    
+```{r}
+LST <- LST-273.15
+plot(LST)
+```
+    
+# 8.11 Calucating urban area from Landsat data   
+在 Landsat 8 数据中，SWIR 为频段 6，NIR 频段为 5
+```{r}
+NDBI=((lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask-
+         lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask)/
+        (lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask+
+        lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask))
+```
+
+```{r}
+NDBIfunexample <- NDVIfun(lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask,
+                          lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask)
+```
+
+8.12市区与温度关系
+我们可以绘制彼此对立的变量，但有很多数据点
+```{r}
+plot(values(NDBI), values(LST))
+```
+这被称为过度绘图问题。因此，让我们从两个栅格层中随机抽取相同像素的子集。
+
+为此，我们需要再次堆叠我们的层
+```{r}
+# stack the layers
+
+computeddata <- LST%>%
+  stack(.,NDBI)%>%
+  terra::as.data.frame()%>%
+  na.omit()%>%
+  # take a random subset
+  dplyr::sample_n(., 500)%>%
+  dplyr::rename(Temp="layer.1", NDBI="layer.2")
+
+ # check the output
+plot(computeddata$Temp, computeddata$NDBI)
+```
+```{r}
+library(plotly)
+library(htmlwidgets)
+```
+将数据转换为 data.frame 以使用ggplot，然后绘制
+```{r}
+heat<-ggplot(computeddata, aes(x = NDBI, y = Temp))+
+  geom_point(alpha=2, colour = "#51A0D5")+
+  labs(x = "Temperature", 
+       y = "Urban index",
+       title = "Manchester urban and temperature relationship")+
+   geom_smooth(method='lm', se=FALSE)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# interactive plot
+ggplotly(heat)
+
+## `geom_smooth()` using formula 'y ~ x'
+
+```
+
+如何绘制整个数据集而不是随机子集.....
+
+```{r}
+computeddatafull <- LST%>%
+  stack(.,NDBI)%>%
+  terra::as.data.frame()%>%
+  na.omit()%>%
+  # take a random subset
+  dplyr::rename(Temp="layer.1", NDBI="layer.2")
+
+hexbins <- ggplot(computeddatafull, 
+                  aes(x=NDBI, y=Temp)) +
+  geom_hex(bins=100, na.rm=TRUE) +
+  labs(fill = "Count per bin")+
+  geom_smooth(method='lm', se=FALSE, size=0.6)+
+  theme_bw()
+
+ggplotly(hexbins)
+```
+
+
+
+#8.13统计汇总
+要查看我们的变量是否相关，让我们运行一些基本的相关性
+
+```{r}
+library(rstatix)
+Correlation <- computeddatafull %>%
+  cor_test(Temp, NDBI, use = "complete.obs", method = c("pearson"))
+
+Correlation
+```
+
+```{r}
+abs(qt(0.05/2, 198268))
+```
+
+```{r}
+computeddatafull %>%
+  pull(Temp)%>%
+  length()
+```
+
+```{r}
+length(computeddatafull)
+```
+
+
+#8.14 LSOA/MSOA 统计
+```{r}
+library(dplyr)
+library(sf)
+
+# read in LSOA data
+UK_LSOA <- st_read(here::here("data", 
+                                    "Lower_Super_Output_Area_(LSOA)_IMD2019__(WGS84)-shp",
+                                          "5878ebcf-f091-4bde-8864-aa547dd45afd2020330-1-8g4usn.8evuq.shp"))
+```
+
+```{r}
+# project it to match Manchester boundary
+UK_LSOA <- UK_LSOA %>%
+  st_transform(., 32630)
+
+# read in MSOA and project it
+MSOA <- st_read(here::here("data",
+                           "MSOA_EngWal_Dec_2011_Generalised_ClippedEW_0",
+                           "Middle_Layer_Super_Output_Areas_December_2011_Generalised_Clipped_Boundaries_in_England_and_Wales.shp")) %>%
+   st_transform(., 32630)
+```
+
+
+```{r}
+#select only MSOA within boundary
+manchester_MSOA <- MSOA[manchester_boundary, , op=st_within]
+
+#select only LSOA that intersect MSOA
+manchester_LSOA <- UK_LSOA[manchester_MSOA,]
+```
+
+
+接下来，我们需要使用raster::extract(). fun()指定如何汇总空间单元 (LSOA) 内的像素，na.rm()=TRUE忽略 NA 值并将df=TRUE结果输出到数据帧。
+```{r}
+# extract mean LST value per LSOA
+LST_per_LSOA <- raster::extract(LST, manchester_LSOA, fun=mean, na.rm=TRUE, df=TRUE)
+
+# add the LSOA ID back
+LST_per_LSOA$FID<-manchester_LSOA$FID
+
+# join the average temp to the sf
+manchester_LSOA_temp <- manchester_LSOA %>%
+  left_join(.,
+            LST_per_LSOA,
+            by="FID")%>%
+  dplyr::rename(temp=layer)
+```
+
+
+
+
+
+
+
