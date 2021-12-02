@@ -5,4 +5,27 @@ date: "2021/12/2"
 output: html_document
 ---
 
+```{r}
+library('googledrive')
+
+drive_download('https://drive.google.com/file/d/1p74oSaSZ15fbQJrmdCXp64YCvpexaG3m/view?usp=sharing',
+               path = 'examplegoogledrive/LC08_L1TP_203023_20190513_20190521_01_T1.tar.gz',
+               overwrite = T)
+
+
+library(tidyverse)
+library(fs)
+library(stringr)
+library(utils)
+
+##解压
+listfiles<-dir_info(here::here("examplegoogledrive")) %>%
+  dplyr::filter(str_detect(path, ".gz")) %>%
+  dplyr::select(path)%>%
+  dplyr::pull()%>%
+  #print out the .gz file
+  print()%>%
+  as.character()%>%
+  utils::untar(exdir=here::here("examplegoogledrive"))
+```
 
