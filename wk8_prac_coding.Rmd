@@ -630,9 +630,11 @@ library(cowplot)
 library(sysfonts)
 library(extrafont) 
 library(showtext) # more fonts
+library(ggplot2)
 ```
 
 ```{r}
+
 #font_add_google("Lato", regular.wt = 300, bold.wt = 700) # I like using Lato for data viz (and everything else...). Open sans is also great for web viewing.
 showtext_auto()
 
@@ -705,7 +707,7 @@ all
 ```
 
 ```{r}
-dev.copy(device = png, filename = here::here("images", "bivaraite.png"), width = 687, height = 455) 
+dev.copy(device = png, filename = here::here("data", "bivaraite.png"), width = 687, height = 455) 
 ```
 
 ```{r}
